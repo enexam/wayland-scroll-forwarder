@@ -115,21 +115,19 @@ class ScrollForwarder:
 
         try:
             while True:
-                # Poll input events with timeout
                 events = selector.poll(500)
 
-                # Window attach if not yet found
                 if not self.target_window and self.target_class:
                     self.target_window = self.find_window_by_class(self.target_class)
                     if self.target_window:
                         logger.info(f"Found window: {hex(self.target_window.id)}")
 
-                # Stop if window existed but is now gone
+                # Graceful stop if window is gone
                 if self.target_window and not self.does_target_window_exist():
                     logger.info("Target window closed. Exiting forwarder.")
                     break
 
-                # Process input events as before
+                # Handle events
                 for fd, _ in events:
                     device = next((d for d in self.devices if d.fileno() == fd), None)
                     if not device:
