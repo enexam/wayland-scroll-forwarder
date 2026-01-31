@@ -1,4 +1,4 @@
-#!/bin/env python3
+#!/usr/bin/env python3
 import evdev
 from evdev import InputDevice, ecodes
 from Xlib import X, display
@@ -10,33 +10,26 @@ import time
 import logging
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(format = '%(levelname)s:%(message)s', level=logging.INFO)
+logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO)
+
 
 class ScrollForwarder:
-    def __init__(self, target_window_id = None, target_class = None):
+    def __init__(self, target_class):
         self.display = display.Display()
         self.root = self.display.screen().root
-        self.target_window_id = target_window_id
         self.target_class = target_class
         self.target_window = None
 
-        # Find the target window
-        if target_window_id:
-            self.target_window = self.display.create_resource_object('window', target_window_id)
-            logger.info(f"Targeting window ID: {hex(target_window_id)}")
-        elif target_class:
+        if target_class:
             self.target_window = self.find_window_by_class(target_class)
             if self.target_window:
                 logger.info(f"Found window: {hex(self.target_window.id)}")
             else:
-                logger.error(f"Window with class '{target_class}' not found.")
-                logger.error(f"Start your app first, then run this script.")
-                sys.exit(1)
+                logger.warning(f"Window with class '{target_class}' not found. Will wait for it to appear...")
 
-        # Find mouse/touchpad devices
         self.devices = self.find_scroll_devices()
         if not self.devices:
-            logger.error("No device found")
+            logger.error("No input device with scroll capability found. Exiting.")
             sys.exit(1)
         logger.info(f"Monitoring devices: {[d.name for d in self.devices]}")
 
@@ -47,9 +40,9 @@ class ScrollForwarder:
             try:
                 device = InputDevice(path)
                 caps = device.capabilities()
-                # Check for relative scroll wheel (REL_WHEEL, REL_HWHEEL)
                 if ecodes.EV_REL in caps:
-                    if ecodes.REL_WHEEL in caps[ecodes.EV_REL] or ecodes.REL_HWHEEL in caps[ecodes.EV_REL]:
+                    rel_codes = caps[ecodes.EV_REL]
+                    if ecodes.REL_WHEEL in rel_codes or ecodes.REL_HWHEEL in rel_codes:
                         devices.append(device)
             except (OSError, PermissionError):
                 continue
@@ -62,7 +55,7 @@ class ScrollForwarder:
                 wm_class = window.get_wm_class()
                 if wm_class and any(class_name.lower() in c.lower() for c in wm_class):
                     return window
-            except:
+            except Exception:
                 pass
 
             try:
@@ -71,7 +64,7 @@ class ScrollForwarder:
                     result = search_windows(child)
                     if result:
                         return result
-            except:
+            except Exception:
                 pass
 
             return None
@@ -80,14 +73,20 @@ class ScrollForwarder:
 
     def is_target_window_active(self):
         """Check if target window or its children are visible/active"""
-        if not self.target_window:
+        try:
+            return self.target_window.get_attributes().map_state == X.IsViewable
+        except Exception:
             return False
 
+    def does_target_window_exist(self):
+        """Return True if the target window still exists, even if minimized or out of focus."""
+        if not self.target_window:
+            return False
         try:
-            # Check if window is mapped (visible)
-            attrs = self.target_window.get_attributes()
-            return attrs.map_state == X.IsViewable
-        except:
+            # Raise = window gone
+            _ = self.target_window.get_geometry()
+            return True
+        except X.error.XError:
             return False
 
     def inject_scroll_to_window(self, direction, value):
@@ -95,31 +94,20 @@ class ScrollForwarder:
         if not self.target_window:
             return
 
-        # Map direction to X11 buttons: 4=up, 5=down, 6=left, 7=right
         if direction == ecodes.REL_WHEEL:
-            button = 4 if value > 0 else 5 # Scroll up/down
+            button = 4 if value > 0 else 5
         elif direction == ecodes.REL_HWHEEL:
             button = 6 if value < 0 else 7
         else:
             return
 
-        # Get pointer position relative to target window
-        try:
-            pointer = self.target_window.query_pointer()
-            x, y = pointer.win_x, pointer.win_y
-        except:
-            x, y = 100, 100
-
-        # Inject button press/release for each scroll notch
         for _ in range(abs(value)):
-            # Send ButtonPress with coordinates
-            event = xtest.fake_input(self.display, X.ButtonPress, button)
-            event = xtest.fake_input(self.display, X.ButtonRelease, button)
+            xtest.fake_input(self.display, X.ButtonPress, button)
+            xtest.fake_input(self.display, X.ButtonRelease, button)
         self.display.sync()
 
     def run(self):
-        """Main event loop"""
-        # Create selector for efficient polling
+        """Main event loop with window-wait polling"""
         selector = select.poll()
         for device in self.devices:
             selector.register(device.fileno(), select.POLLIN)
@@ -127,40 +115,52 @@ class ScrollForwarder:
 
         try:
             while True:
-                # Wait for events (blocking, low CPU usage)
-                events = selector.poll()
+                # Poll input events with timeout
+                events = selector.poll(500)
+
+                # Window attach if not yet found
+                if not self.target_window and self.target_class:
+                    self.target_window = self.find_window_by_class(self.target_class)
+                    if self.target_window:
+                        logger.info(f"Found window: {hex(self.target_window.id)}")
+
+                # Stop if window existed but is now gone
+                if self.target_window and not self.does_target_window_exist():
+                    logger.info("Target window closed. Exiting forwarder.")
+                    break
+
+                # Process input events as before
                 for fd, _ in events:
-                    # Find which device triggered
-                    device = next(d for d in self.devices if d.fileno() == fd)
-                    # Read event
-                    for event in device.read():
-                        if event.type == ecodes.EV_REL:
-                            if event.code in (ecodes.REL_WHEEL, ecodes.REL_HWHEEL):
-                                # Always forward if target window is active / visible
+                    device = next((d for d in self.devices if d.fileno() == fd), None)
+                    if not device:
+                        continue
+                    try:
+                        for event in device.read():
+                            if event.type == ecodes.EV_REL and event.code in (ecodes.REL_WHEEL, ecodes.REL_HWHEEL):
                                 if self.is_target_window_active():
-                                    # Inject to target app
                                     self.inject_scroll_to_window(event.code, event.value)
+                    except (BlockingIOError, OSError):
+                        continue
         except KeyboardInterrupt:
             logger.info("\nStopping forwarder...")
         finally:
             for device in self.devices:
-                device.close()
+                try:
+                    device.close()
+                except Exception:
+                    pass
+
+
 
 if __name__ == "__main__":
     if os.geteuid() != 0:
         logger.error("This script needs root access to read input events.")
+        logger.error("Usage: sudo scroll_forwarder <window_class>")
         sys.exit(1)
+
     if len(sys.argv) < 2:
-        logger.error("Usage: sudo python3 scroll_forwarder.py --window-id <hex_id> or sudo python3 scroll_forwarder.py <window_class>")
-        logger.error("Run xprop WM_CLASS and click on app")
+        logger.error("Run 'xprop WM_CLASS' and click on app to get the window class.")
+        logger.error("Usage: sudo scroll_forwarder <window_class>")
         sys.exit(1)
 
-    if sys.argv[1] == "--window-id":
-        if len(sys.argv) < 3:
-            logger.error("Provide window ID.")
-            sys.exit(1)
-        forwarder = ScrollForwarder(target_window_id=int(sys.argv[2], 16))
-    else:
-        forwarder = ScrollForwarder(target_class=sys.argv[1])
-
-    forwarder.run()
+    ScrollForwarder(sys.argv[1]).run()
