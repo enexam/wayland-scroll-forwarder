@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import evdev
 from evdev import InputDevice, ecodes
-from Xlib import X, display
+from Xlib import X, display, error
 from Xlib.ext import xtest
 import select
 import sys
@@ -86,7 +86,7 @@ class ScrollForwarder:
             # Raise = window gone
             _ = self.target_window.get_geometry()
             return True
-        except X.error.XError:
+        except error.XError:
             return False
 
     def inject_scroll_to_window(self, direction, value):
