@@ -65,6 +65,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("window_class", nargs="?", help="exact WM_CLASS value (for GFN: GeForceNOW)")
     parser.add_argument("--device", metavar="PATH", help="one /dev/input/eventN or /dev/input/by-id path")
     parser.add_argument("--list-devices", action="store_true", help="list wheel-capable readable devices and exit")
+    parser.add_argument(
+        "--allow-unfocused",
+        action="store_true",
+        help="forward while the target exists even if the compositor hides X11 focus",
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
 
@@ -162,14 +167,17 @@ def drop_sudo_privileges() -> None:
 
 
 class ScrollForwarder:
-    def __init__(self, target_class: str, device: InputDevice) -> None:
+    def __init__(self, target_class: str, device: InputDevice, *, allow_unfocused: bool = False) -> None:
         self.target_class = target_class.casefold()
         self.device = device
         self.normalizer = WheelNormalizer()
+        self.allow_unfocused = allow_unfocused
         self.display = display.Display()
         self.root = self.display.screen().root
         self.target_window = None
         self._find_and_log_target()
+        if self.allow_unfocused:
+            LOG.warning("Focus checking disabled; forwarding whenever the target window exists")
 
     def _window_matches(self, window) -> bool:
         try:
@@ -277,7 +285,7 @@ class ScrollForwarder:
 
         if not any(frame.saw_legacy or frame.saw_hi_res for frame in frames.values()):
             return
-        if not self.target_is_focused():
+        if not self.allow_unfocused and not self.target_is_focused():
             return
         for axis, frame in frames.items():
             steps = self.normalizer.steps(axis, frame)
@@ -340,7 +348,11 @@ def main(argv: list[str] | None = None) -> int:
         path = validate_device_path(args.device)
         device = open_wheel_device(path)
         drop_sudo_privileges()
-        return ScrollForwarder(args.window_class, device).run()
+        return ScrollForwarder(
+            args.window_class,
+            device,
+            allow_unfocused=args.allow_unfocused,
+        ).run()
     except (ValueError, PermissionError, OSError, error.DisplayError) as exc:
         LOG.error("%s", exc)
         return 1

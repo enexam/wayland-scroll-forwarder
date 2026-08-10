@@ -50,6 +50,18 @@ The script opens only that device, drops to `SUDO_UID`, and then connects to X11
 It waits for GFN, forwards only while GFN is focused, and exits after the target
 window closes.
 
+Some compositors report an unclassified Xwayland proxy as active after a game
+grabs the pointer. If wheel events are detected but rejected by focus checking,
+use the explicit compatibility mode:
+
+```bash
+./scroll_forwarder.py --allow-unfocused \
+  --device /dev/input/by-id/YOUR-MOUSE-event-mouse GeForceNOW
+```
+
+This forwards whenever the matching GFN window exists, including when another
+application is focused. Use it only for the duration of the GFN session.
+
 For completely unprivileged operation, grant the active desktop user a device ACL
 (temporary until reconnect/reboot):
 
