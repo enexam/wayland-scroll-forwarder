@@ -62,6 +62,41 @@ use the explicit compatibility mode:
 This forwards whenever the matching GFN window exists, including when another
 application is focused. Use it only for the duration of the GFN session.
 
+## Persistent installation
+
+Input event numbers such as `/dev/input/event19` are not stable: they can change
+after rebooting or reconnecting a Bluetooth mouse. The included installer creates:
+
+- a udev rule matching the exact kernel device name and mouse interface
+- the stable symlink `/dev/input/wayland-scroll-forwarder-mouse`
+- a `uaccess` grant for the active desktop user only
+- a persistent user service that waits quietly while the mouse is absent and
+  resumes automatically after it reconnects
+
+First identify the exact mouse name with `--list-devices`, then install. For example:
+
+```bash
+sudo ./scroll_forwarder.py --list-devices
+./install-persistent.sh "Naga V2 Pro Mouse"
+```
+
+The authentication dialog covers only installation/reloading of the udev rule.
+The forwarder itself runs as the desktop user. Check or stop it with:
+
+```bash
+systemctl --user status wayland-scroll-forwarder
+systemctl --user stop wayland-scroll-forwarder
+```
+
+Disable persistent startup with:
+
+```bash
+systemctl --user disable --now wayland-scroll-forwarder
+```
+
+To remove the system rule as well, delete
+`/etc/udev/rules.d/70-wayland-scroll-forwarder.rules` as root and reload udev.
+
 For completely unprivileged operation, grant the active desktop user a device ACL
 (temporary until reconnect/reboot):
 

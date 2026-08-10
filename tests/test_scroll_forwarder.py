@@ -31,10 +31,13 @@ class WheelNormalizerTests(unittest.TestCase):
 
 class ArgumentTests(unittest.TestCase):
     def test_required_runtime_values_parse(self):
-        args = parse_args(["GeForceNOW", "--device", "/dev/input/event7", "--allow-unfocused"])
+        args = parse_args(
+            ["GeForceNOW", "--device", "/dev/input/event7", "--allow-unfocused", "--wait-for-device"]
+        )
         self.assertEqual(args.window_class, "GeForceNOW")
         self.assertEqual(args.device, "/dev/input/event7")
         self.assertTrue(args.allow_unfocused)
+        self.assertTrue(args.wait_for_device)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ import pwd
 import select
 import stat
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,6 +70,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--allow-unfocused",
         action="store_true",
         help="forward while the target exists even if the compositor hides X11 focus",
+    )
+    parser.add_argument(
+        "--wait-for-device",
+        action="store_true",
+        help="wait for the selected device path to appear after boot or reconnect",
     )
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
@@ -142,6 +148,19 @@ def open_wheel_device(path: Path) -> InputDevice:
         device.close()
         raise ValueError(f"{path} ({device.name}) does not advertise wheel events")
     return device
+
+
+def wait_for_wheel_device(path_text: str) -> InputDevice:
+    """Wait indefinitely for a configured stable device link to become usable."""
+    logged = False
+    while True:
+        try:
+            return open_wheel_device(validate_device_path(path_text))
+        except (ValueError, PermissionError, OSError) as exc:
+            if not logged:
+                LOG.info("Waiting for input device %s (%s)", path_text, exc)
+                logged = True
+            time.sleep(2)
 
 
 def drop_sudo_privileges() -> None:
@@ -345,8 +364,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        path = validate_device_path(args.device)
-        device = open_wheel_device(path)
+        if args.wait_for_device:
+            device = wait_for_wheel_device(args.device)
+        else:
+            path = validate_device_path(args.device)
+            device = open_wheel_device(path)
         drop_sudo_privileges()
         return ScrollForwarder(
             args.window_class,
