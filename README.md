@@ -1,94 +1,80 @@
-# wayland-scroll-forwarder
+# Hardened Wayland Scroll Forwarder
 
-This script fixes scroll wheel when using apps designed for X11 on Wayland.
+This is a security-focused fork of
+[`enexam/wayland-scroll-forwarder`](https://github.com/enexam/wayland-scroll-forwarder).
+It forwards wheel events from one explicitly selected physical device only while
+an exact X11/Xwayland `WM_CLASS` is focused.
 
-## Installation
+## Security changes
 
-### Dependencies
+- Requires an explicit input-device path; it never reads every input device.
+- Permanently drops root and supplementary groups immediately after opening that device.
+- Refuses direct root execution; privileged fallback must come from a desktop user via `sudo`.
+- Requires an exact, case-insensitive `WM_CLASS` match.
+- Checks `_NET_ACTIVE_WINDOW`; a merely visible target receives nothing.
+- De-duplicates paired legacy/high-resolution wheel events.
+- Caps synthetic events from a single input report.
+- Downloads or executes no remote content and creates no persistence.
 
-Install dependencies `libXtst`, `python-evdev`, `python-xlib`
+The safest configuration is to give the logged-in user read access to one stable
+mouse event device and run the forwarder without `sudo`. The sudo fallback still
+drops privileges, but opening the device through a privileged Python process has
+a larger attack surface than a device ACL.
 
-Ubuntu / Debian (apt):
+## Dependencies
 
-```bash
-sudo apt install python3-evdev python3-xlib libxtst6
-```
+- Python 3
+- `python-evdev`
+- `python-xlib`
+- `libXtst`
 
-Arch / EndeavourOS (pacman):
+Fedora/Bazzite currently provides the required Python modules on the host. Other
+distributions can use their native packages listed by the upstream project.
 
-```bash
-sudo pacman -S python-evdev python-xlib libxtst
-```
+## Usage
 
-Fedora (dnf):
-
-```bash
-sudo dnf install python3-evdev python3-xlib libXtst
-```
-
-### Wayland Scroll Forwarder
-
-Install `wayland_scroll_forwarder`
-
-```bash
-sudo curl -sL https://raw.githubusercontent.com/enexam/wayland-scroll-forwarder/main/scroll_forwarder.py -o /usr/local/bin/wayland_scroll_forwarder && sudo chmod +x /usr/local/bin/wayland_scroll_forwarder
-```
-
-### First use
-
-Start the X11 app. Example: GeForce Now
+Discover the mouse event device:
 
 ```bash
-flatpak run com.nvidia.geforcenow
+sudo ./scroll_forwarder.py --list-devices
 ```
 
-DO NOT LAUNCH A GAME (or the subprocess needing the fix) YET.
-
-Get the window class name. In another terminal:
+Prefer a stable `/dev/input/by-id/...-event-mouse` path from the output. Then run:
 
 ```bash
-xprop WM_CLASS
+sudo --preserve-env=DISPLAY,XAUTHORITY ./scroll_forwarder.py \
+  --device /dev/input/by-id/YOUR-MOUSE-event-mouse GeForceNOW
 ```
 
-Then click inside the app window. It returns the window class (last string).
+The script opens only that device, drops to `SUDO_UID`, and then connects to X11.
+It waits for GFN, forwards only while GFN is focused, and exits after the target
+window closes.
+
+For completely unprivileged operation, grant the active desktop user a device ACL
+(temporary until reconnect/reboot):
 
 ```bash
-WM_CLASS(STRING) = "GeForceNOW", "GeForceNOW"
+sudo setfacl -m "u:$USER:r" /dev/input/by-id/YOUR-MOUSE-event-mouse
+./scroll_forwarder.py --device /dev/input/by-id/YOUR-MOUSE-event-mouse GeForceNOW
 ```
 
-Start the python script in sudo with the window class.
+Do not grant access to keyboard event devices or add the user broadly to the
+`input` group.
+
+## Tests
 
 ```bash
-sudo wayland_scroll_forwarder GeForceNOW
+python3 -m unittest discover -s tests -v
+python3 -m py_compile scroll_forwarder.py
 ```
 
-The scroll forwarder will stop when closing your app (such as GFN).
-You can also press CTRL+C in the terminal running the scroll forwarder to stop it.
+## Limitations
 
-### Create alias for your apps
+XTest synthesizes wheel buttons into Xwayland globally. Focus checking minimizes
+misdelivery but cannot make XTest a true per-window injection API. The program
+does not grab or suppress the original device, so an application that starts
+receiving native wheel events may see duplicates; stop the forwarder after an
+upstream fix.
 
-After testing your app with the scroll forwarder, you can create an alias with the specific class. This will make a single command start both your app and the scroll forwarder.
-
-Example with GeForce Now (replace app name and class name as needed)
-
-```bash
-echo "alias geforce-now='sudo wayland_scroll_forwarder GeForceNOW & flatpak run com.nvidia.geforcenow'" >> ~/.bashrc && source ~/.bashrc
-```
-
-Now you can launch the app with scroll fix by simply typing in a terminal the alias:
-
-```bash
-geforce-now
-```
-
-## Multiplayer
-
-Not tested against anti-cheat softwares. USE AT YOUR OWN RISK.
-
-## Troubleshooting
-
-Please [report issues](https://github.com/enexam/wayland-scroll-forwarder/issues/new) you are facing.
-
-### Common issues
-
-Well... I don't know yet.
+This workaround is not endorsed by NVIDIA and has not been evaluated against
+individual games' anti-cheat systems.
